@@ -1,0 +1,102 @@
+#!/bin/sh
+# Copyright 2016, Isaac Dunham
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+# IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+# USE OR OTHER DEALINGS IN THE SOFTWARE.
+# 
+# Except as contained in this notice, the name of a copyright holder shall
+# not be used in advertising or otherwise to promote the sale, use or other
+# dealings in this Software without prior written authorization of the
+# copyright holder.
+# SPDX-License-Identifier: curl
+#
+# Installation (cups built with prefix=/usr):
+# cp $0 /usr/lib/cups/filter/ted-cups
+# echo 'application/rtf rtf string(0,"{\rtf1")' \
+#  >/usr/share/cups/mime/ted-rtf.types
+# echo 'application/rtf application/postscript 20 ted-cups' \
+#  >/usr/share/cups/mime/ted-rtf.convs
+#
+# Usage: $0 job-id user title copies options [FILE]
+# ignore job-id user title
+# ignore copies, since that will get figured out elsewhere in the pipeline
+# in options, look for media=... (specifically: letter|legal|a4|a5|executive)
+# if FILE is not specified, read from stdin: set file to rtf-
+
+test $# -eq 6 -o $# -eq 5 || {
+echo "ERROR: usage is $0 job-id user title copies options [FILE]"
+exit 1
+}
+
+INPUT="$6"
+test -n "$INPUT" && test "$INPUT" != "-" || INPUT="-rtf-"
+export INPUT
+
+test -n "$PRINTER" || PRINTER=`LC_ALL=C lpstat -d | sed -e 's/^system default destination: //'`
+export PRINTER
+
+case "$5" in
+    (*PageSize=*)
+	MEDIA=`printf ' %s\n' "$5" | \
+	    sed -ne 's/.*[[:space:]]PageSize=\([^[:space:]]\{1,\}\).*/\1/p'`
+    ;;
+    (*media=*)
+	MEDIA=`printf ' %s\n' "$5" | \
+	    sed -ne 's/.*[[:space:]]media=\([^[:space:]]\{1,\}\).*/\1/p'`
+    ;;
+    (*)
+	MEDIA=`LC_ALL=C lpoptions -l -p "$PRINTER" | \
+	    sed -ne 's_^PageSize/Media Size:.*\*\([[:alnum:]]\{1,\}\).*_\1_p'`
+    ;;
+esac
+echo "DEBUG: media=$MEDIA" >&2
+MEDIA=`printf '%s\n' "$MEDIA" | tr '[A-Z]' '[a-z]'`
+IFS=" ,"
+for VAR in $MEDIA
+    do
+	unset IFS
+	case "$VAR" in
+# This is for custom sizes like 100x145mm. 
+# Unfortunately, it's a slightly overgenerous match, but at least
+# Postscript specifies a default unit (inches).
+	    ([1-9]x[1-9]|[1-9][0-9]x[1-9]|[1-9]x[1-9][0-9]|[1-9][0-9]x[1-9][0-9])
+		PAPER="$VARin"
+		break
+	    ;;
+	    (*[0-9]x[0-9]*)
+		PAPER="$VAR"
+		break
+	    ;;
+	    (landscape)
+		ORIENT=landscape
+	    ;;
+	    (portrait)
+		ORIENT=portrait
+	    ;;
+# Check if it's a libpaper-supported page description
+	    (*)
+		PAPER=`paperconf "$VAR"`
+		test -n "$PAPER" && break
+	    ;;
+	esac
+    done
+unset IFS
+
+test -n "$PAPER" || PAPER=`paperconf -d` || {
+echo "ERROR: could not determine paper size (media=$MEDIA)" >&2
+exit 1
+}
+export PAPER
+
+echo "DEBUG: running Ted --printToFilePaper $INPUT -ps- $PAPER" >&2
+# lenientRTF is used in case someone sends a bad document
+Ted --setProperty lenientRtf 1 --printToFilePaper "$INPUT" -ps- "$PAPER"

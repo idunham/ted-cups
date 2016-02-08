@@ -1,0 +1,4 @@
+# mime types which cups doesn't support out-of-the-box
+# Rich Text Format:
+application/rtf	rtf string(0,"{\rtf1")
+
